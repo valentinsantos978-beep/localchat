@@ -143,11 +143,11 @@ class LlamaServer:
         self.stop()
         server = extract_llama_server()
         if not server:
-            raise RuntimeError('llama-server indisponivel')
+            raise RuntimeError('llama-server indisponivel (asset ausente)')
         env = dict(os.environ)
         env['LD_LIBRARY_PATH'] = get_bin_dir()
         args = [server, '-m', model_path, '--host', '127.0.0.1', '--port', str(self.port),
-                '-c', '4096', '-t', '4', '--no-webui']
+                '-c', '4096', '-t', '4']
         self.proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         for _ in range(180):
             if self.proc.poll() is not None:
@@ -388,7 +388,6 @@ class ChatUI(BoxLayout):
                 self.append(str(r.json().get('content', r.json()))[:3000])
                 return
 
-            # Caminho IA: local primeiro, Termux como fallback
             if not (LLAMA.running() and LLAMA.ready()):
                 Clock.schedule_once(lambda *_: self.append('[color=888888]Modelo nao carregado. Toque em "Modelo" para escolher um .gguf.[/color]'))
                 return
@@ -412,17 +411,14 @@ class LocalChatApp(App):
         self.ui = ui
 
         def boot(dt):
-            # 1) extrai llama-server dos assets
             server = extract_llama_server()
             if server:
                 Clock.schedule_once(lambda *_: ui.append('[color=888888]llama-server pronto em ' + server + '[/color]'))
             else:
-                Clock.schedule_once(lambda *_: ui.append('[color=ff0000]llama-server nao encontrado nos assets do APK.[/color]'))
+                Clock.schedule_once(lambda *_: ui.append('[color=ff0000]llama-server nao encontrado nos assets do APK (IA local desativada).[/color]'))
 
-            # 2) status
             Clock.schedule_once(lambda *_: ui.update_status())
 
-            # 3) tenta carregar ultimo modelo
             cfg = load_config()
             last = cfg.get('last_model')
             if last and os.path.exists(last):
@@ -430,7 +426,6 @@ class LocalChatApp(App):
             else:
                 Clock.schedule_once(lambda *_: ui.append('[color=888888]Toque em "Modelo" e escolha um .gguf em /sdcard/Download/.[/color]'))
 
-            # 4) checagem periódica do status
             def tick(dt):
                 ui.update_status()
             Clock.schedule_interval(tick, 5)
