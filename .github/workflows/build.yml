@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,26 +32,31 @@ jobs:
         with:
           path: |
             ~/.ccache
-            llama.cpp/build-android
-          key: llama-${ hashFiles('buildozer.spec') }-v1
+            llama.cpp
+            android-ndk-r25b
+          key: llama-b4667-v2
           restore-keys: llama-
 
       - name: Build llama-server (Android arm64 static)
+        id: llama
+        continue-on-error: true
         run: |
           set -e
           NDK_VERSION=r25b
-          NDK_ZIP=android-ndk-$NDK_VERSION-linux.zip
           NDK_DIR=$PWD/android-ndk-$NDK_VERSION
           if [ ! -d "$NDK_DIR" ]; then
-            wget -q https://dl.google.com/android/repository/$NDK_ZIP
-            unzip -q $NDK_ZIP
-            rm $NDK_ZIP
+            echo "Baixando NDK $NDK_VERSION..."
+            wget -q https://dl.google.com/android/repository/android-ndk-$NDK_VERSION-linux.zip
+            unzip -q android-ndk-$NDK_VERSION-linux.zip
+            rm android-ndk-$NDK_VERSION-linux.zip
           fi
-          LLAMA_TAG=b4200
+          LLAMA_TAG=b4667
           if [ ! -d llama.cpp ]; then
+            echo "Clonando llama.cpp tag $LLAMA_TAG..."
             git clone --depth 1 --branch $LLAMA_TAG https://github.com/ggerganov/llama.cpp
           fi
           cd llama.cpp
+          echo "===== Configurando cmake ====="
           cmake -B build-android \
             -DCMAKE_TOOLCHAIN_FILE=$NDK_DIR/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
@@ -61,13 +66,22 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_OPENMP=OFF \
             -DGGML_NATIVE=OFF \
-            -DGGML_LLAMAFILE=OFF \
             -DLLAMA_CURL=OFF
+          echo "===== Compilando target llama-server ====="
           cmake --build build-android --target llama-server -j$(nproc)
           mkdir -p ../bin
           cp build-android/bin/llama-server ../bin/llama-server
           chmod +x ../bin/llama-server
-          ls -la ../bin/
+          echo "OK: bin/llama-server gerado ($(stat -c%s ../bin/llama-server) bytes)"
+
+      - name: Prepare buildozer.spec (fallback se llama falhou)
+        run: |
+          if [ ! -f bin/llama-server ]; then
+            echo "::warning::llama-server nao foi compilado. O APK sera gerado SEM IA local (so shell/Termux)."
+            sed -i '/^android.add_assets/d' buildozer.spec
+          else
+            echo "OK: bin/llama-server presente, IA local sera incluida no APK."
+          fi
 
       - name: Cache buildozer
         uses: actions/cache@v4
@@ -76,7 +90,7 @@ jobs:
             ~/.buildozer
             ~/.gradle
             ~/.cache/pip
-          key: bz-${ hashFiles('buildozer.spec') }-v1
+          key: bz-${ hashFiles('buildozer.spec') }-v3
           restore-keys: bz-
 
       - name: Install buildozer
@@ -87,6 +101,17 @@ jobs:
       - name: Build APK
         run: |
           buildozer -v android debug 2>&1 | tee build.log
+
+      - name: Verificar APK gerado
+        run: |
+          echo "===== Conteudo de bin/ ====="
+          ls -la bin/ || echo "(bin/ nao existe)"
+          if ls bin/*.apk >/dev/null 2>&1; then
+            echo "OK: APK gerado"
+          else
+            echo "::error::Nenhum APK foi gerado em bin/. Veja o artifact build-log."
+            exit 1
+          fi
 
       - name: Upload APK
         if: always()
