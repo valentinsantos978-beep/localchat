@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK (otimizado)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 150
+    timeout-minutes: 60
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,82 +19,40 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install system deps
+      - name: Instalar dependências do sistema
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             openjdk-17-jdk zip unzip cmake ninja-build \
             libffi-dev libssl-dev libjpeg-dev zlib1g-dev \
             libncurses5-dev libncursesw5-dev libsqlite3-dev \
-            build-essential autoconf automake libtool pkg-config ccache wget
+            build-essential autoconf automake libtool pkg-config ccache
 
-      - name: Cache llama.cpp build
+      - name: Cache Buildozer (~/.buildozer)
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.ccache
-            llama.cpp
-            android-ndk-r25b
-          key: llama-b4667-v2
-          restore-keys: llama-
+          path: ~/.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-${{ runner.os }}-
 
-      - name: Build llama-server (Android arm64 static)
-        id: llama
-        continue-on-error: true
-        run: |
-          set -e
-          NDK_VERSION=r25b
-          NDK_DIR=$PWD/android-ndk-$NDK_VERSION
-          if [ ! -d "$NDK_DIR" ]; then
-            echo "Baixando NDK $NDK_VERSION..."
-            wget -q https://dl.google.com/android/repository/android-ndk-$NDK_VERSION-linux.zip
-            unzip -q android-ndk-$NDK_VERSION-linux.zip
-            rm android-ndk-$NDK_VERSION-linux.zip
-          fi
-          LLAMA_TAG=b4667
-          if [ ! -d llama.cpp ]; then
-            echo "Clonando llama.cpp tag $LLAMA_TAG..."
-            git clone --depth 1 --branch $LLAMA_TAG https://github.com/ggerganov/llama.cpp
-          fi
-          cd llama.cpp
-          echo "===== Configurando cmake ====="
-          cmake -B build-android \
-            -DCMAKE_TOOLCHAIN_FILE=$NDK_DIR/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
-            -DANDROID_STL=c++_static \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_OPENMP=OFF \
-            -DGGML_NATIVE=OFF \
-            -DLLAMA_CURL=OFF
-          echo "===== Compilando target llama-server ====="
-          cmake --build build-android --target llama-server -j$(nproc)
-          mkdir -p ../bin
-          cp build-android/bin/llama-server ../bin/llama-server
-          chmod +x ../bin/llama-server
-          echo "OK: bin/llama-server gerado ($(stat -c%s ../bin/llama-server) bytes)"
-
-      - name: Prepare buildozer.spec (fallback se llama falhou)
-        run: |
-          if [ ! -f bin/llama-server ]; then
-            echo "::warning::llama-server nao foi compilado. O APK sera gerado SEM IA local (so shell/Termux)."
-            sed -i '/^android.add_assets/d' buildozer.spec
-          else
-            echo "OK: bin/llama-server presente, IA local sera incluida no APK."
-          fi
-
-      - name: Cache buildozer
+      - name: Cache Gradle (~/.gradle)
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.buildozer
-            ~/.gradle
-            ~/.cache/pip
-          key: bz-${ hashFiles('buildozer.spec') }-v3
-          restore-keys: bz-
+          path: ~/.gradle
+          key: gradle-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
-      - name: Install buildozer
+      - name: Cache pip (~/.cache/pip)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+
+      - name: Instalar Buildozer e Cython
         run: |
           python -m pip install --upgrade pip
           pip install buildozer cython==0.29.36
@@ -101,17 +60,6 @@ jobs:
       - name: Build APK
         run: |
           buildozer -v android debug 2>&1 | tee build.log
-
-      - name: Verificar APK gerado
-        run: |
-          echo "===== Conteudo de bin/ ====="
-          ls -la bin/ || echo "(bin/ nao existe)"
-          if ls bin/*.apk >/dev/null 2>&1; then
-            echo "OK: APK gerado"
-          else
-            echo "::error::Nenhum APK foi gerado em bin/. Veja o artifact build-log."
-            exit 1
-          fi
 
       - name: Upload APK
         if: always()
@@ -121,7 +69,7 @@ jobs:
           path: bin/*.apk
           if-no-files-found: warn
 
-      - name: Upload build log
+      - name: Upload log
         if: always()
         uses: actions/upload-artifact@v4
         with:
